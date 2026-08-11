@@ -15,11 +15,11 @@ const DESKS = [
   { x: 340, y: 300, w: 120, h: 60 }
 ];
 
-// Desk seats (x, y coordinates right next to desks where caught players get sent)
+// Desk seats
 const DESK_SEATS = [
-  { x: 160, y: 180 }, // Under Desk 1
-  { x: 640, y: 180 }, // Under Desk 2
-  { x: 400, y: 380 }  // Under Desk 3
+  { x: 160, y: 180 },
+  { x: 640, y: 180 },
+  { x: 400, y: 380 }
 ];
 
 // Boss State
@@ -47,6 +47,12 @@ app.get('{*path}', (req, res) => {
         button { background: #2563eb; font-weight: bold; cursor: pointer; border: none; margin-top: 20px; }
         button:hover { background: #1d4ed8; }
         canvas { background: #e2e8f0; border: 4px solid #334155; border-radius: 8px; margin-top: 10px; }
+        
+        /* Chat Input Area */
+        #chatContainer { width: 800px; margin: 10px auto 0 auto; display: flex; gap: 8px; }
+        #chatInput { flex: 1; margin-top: 0; background: #1e293b; color: white; border: 2px solid #334155; }
+        #sendBtn { width: 100px; margin-top: 0; background: #10b981; }
+        #sendBtn:hover { background: #059669; }
       </style>
     </head>
     <body>
@@ -63,7 +69,14 @@ app.get('{*path}', (req, res) => {
 
       <h2>Virtual Office Floor</h2>
       <canvas id="gameCanvas" width="800" height="500"></canvas>
-      <p style="color:#94a3b8;">Avoid the <b>Red Boss</b>! If caught, you get sent back to your desk!</p>
+      
+      <!-- Chat Bar -->
+      <div id="chatContainer">
+        <input type="text" id="chatInput" placeholder="Press Enter to send a chat bubble..." maxlength="35" autocomplete="off" />
+        <button id="sendBtn" onclick="sendChat()">Send</button>
+      </div>
+
+      <p style="color:#94a3b8; font-size: 14px;">Use <b>WASD</b> or <b>Arrow Keys</b> to walk around. Avoid the <b>Red Boss</b>!</p>
 
       <script src="/socket.io/socket.io.js"></script>
       <script>
@@ -84,15 +97,45 @@ app.get('{*path}', (req, res) => {
           document.getElementById('profileOverlay').style.display = 'none';
         }
 
+        // Chat functionality
+        function sendChat() {
+          const input = document.getElementById('chatInput');
+          const message = input.value.trim();
+          if (message) {
+            socket.emit('sendChatMessage', message);
+            input.value = '';
+          }
+        }
+
+        // Allow pressing 'Enter' key to send chat
+        document.getElementById('chatInput').addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') sendChat();
+        });
+
         socket.on('currentPlayers', (p) => Object.assign(players, p));
         socket.on('newPlayer', ({ id, playerInfo }) => { players[id] = playerInfo; });
         socket.on('playerMoved', ({ id, x, y }) => { if (players[id]) { players[id].x = x; players[id].y = y; } });
         socket.on('playerDisconnected', (id) => delete players[id]);
-        
         socket.on('bossUpdate', (data) => { bossState = data; });
 
-        window.addEventListener('keydown', (e) => keys[e.key] = true);
-        window.addEventListener('keyup', (e) => keys[e.key] = false);
+        // Handle receiving chat messages
+        socket.on('chatMessage', ({ id, message }) => {
+          if (players[id]) {
+            players[id].chatMessage = message;
+            players[id].chatTimer = Date.now() + 5000; // Display for 5 seconds
+          }
+        });
+
+        window.addEventListener('keydown', (e) => {
+          // Don't move player if typing in the chat box
+          if (document.activeElement === document.getElementById('chatInput')) return;
+          keys[e.key] = true;
+        });
+
+        window.addEventListener('keyup', (e) => {
+          if (document.activeElement === document.getElementById('chatInput')) return;
+          keys[e.key] = false;
+        });
 
         function update() {
           let move = { x: 0, y: 0 };
@@ -101,6 +144,38 @@ app.get('{*path}', (req, res) => {
           if (keys['ArrowLeft'] || keys['a']) move.x -= 1;
           if (keys['ArrowRight'] || keys['d']) move.x += 1;
           if (move.x !== 0 || move.y !== 0) socket.emit('playerMovement', move);
+        }
+
+        function drawSpeechBubble(x, y, text) {
+          ctx.font = '12px system-ui';
+          const textWidth = ctx.measureText(text).width;
+          const padding = 8;
+          const bubbleWidth = textWidth + (padding * 2);
+          const bubbleHeight = 24;
+          const bubbleX = x - (bubbleWidth / 2);
+          const bubbleY = y - 50;
+
+          // Draw Bubble Background
+          ctx.fillStyle = '#ffffff';
+          ctx.strokeStyle = '#0f172a';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.roundRect(bubbleX, bubbleY, bubbleWidth, bubbleHeight, 6);
+          ctx.fill();
+          ctx.stroke();
+
+          // Draw Little Triangle Pointer
+          ctx.beginPath();
+          ctx.moveTo(x - 5, bubbleY + bubbleHeight);
+          ctx.lineTo(x, bubbleY + bubbleHeight + 6);
+          ctx.lineTo(x + 5, bubbleY + bubbleHeight);
+          ctx.fillStyle = '#ffffff';
+          ctx.fill();
+
+          // Draw Message Text
+          ctx.fillStyle = '#0f172a';
+          ctx.textAlign = 'center';
+          ctx.fillText(text, x, bubbleY + 16);
         }
 
         function render() {
@@ -116,7 +191,7 @@ app.get('{*path}', (req, res) => {
             ctx.strokeRect(d.x, d.y, d.w, d.h);
           });
 
-          // Draw Boss (Red Pulsating Circle)
+          // Draw Boss
           const pulseRadius = 18 + Math.sin(pulseTimer) * 4;
           ctx.beginPath();
           ctx.arc(bossState.x, bossState.y, pulseRadius, 0, Math.PI * 2);
@@ -126,17 +201,18 @@ app.get('{*path}', (req, res) => {
           ctx.strokeStyle = '#991b1b';
           ctx.stroke();
 
-          // Boss Label
           ctx.fillStyle = '#ef4444';
           ctx.font = 'bold 14px system-ui';
           ctx.textAlign = 'center';
           ctx.fillText('BOSS 😡', bossState.x, bossState.y - 25);
 
-          // Draw Players
+          // Draw Players & Speech Bubbles
+          const now = Date.now();
           for (let id in players) {
             const p = players[id];
             if (!p.name) continue;
 
+            // Render Player Dot
             ctx.beginPath();
             ctx.arc(p.x, p.y, 14, 0, Math.PI * 2);
             ctx.fillStyle = p.color;
@@ -145,10 +221,16 @@ app.get('{*path}', (req, res) => {
             ctx.strokeStyle = '#0f172a';
             ctx.stroke();
 
+            // Render Name Label
             ctx.fillStyle = '#0f172a';
             ctx.font = 'bold 13px system-ui';
             ctx.textAlign = 'center';
             ctx.fillText(p.name, p.x, p.y - 20);
+
+            // Render Speech Bubble if Active
+            if (p.chatMessage && p.chatTimer > now) {
+              drawSpeechBubble(p.x, p.y, p.chatMessage);
+            }
           }
         }
 
@@ -179,14 +261,12 @@ function checkDeskCollision(x, y, radius = 14) {
 
 // Boss AI Loop
 setInterval(() => {
-  // Pick a new random target location if boss reached destination
   const distToTarget = Math.hypot(boss.targetX - boss.x, boss.targetY - boss.y);
   if (distToTarget < 5) {
     boss.targetX = Math.floor(Math.random() * 700) + 50;
     boss.targetY = Math.floor(Math.random() * 400) + 50;
   }
 
-  // Move boss toward target
   const angle = Math.atan2(boss.targetY - boss.y, boss.targetX - boss.x);
   const nextBossX = boss.x + Math.cos(angle) * boss.speed;
   const nextBossY = boss.y + Math.sin(angle) * boss.speed;
@@ -195,18 +275,16 @@ setInterval(() => {
     boss.x = nextBossX;
     boss.y = nextBossY;
   } else {
-    // Pick new target if hit wall/desk
     boss.targetX = Math.floor(Math.random() * 700) + 50;
     boss.targetY = Math.floor(Math.random() * 400) + 50;
   }
 
-  // Check collision with all active players
   for (let id in players) {
     const p = players[id];
     if (!p.name) continue;
 
     const distToPlayer = Math.hypot(boss.x - p.x, boss.y - p.y);
-    if (distToPlayer < boss.radius + 14) { // Caught!
+    if (distToPlayer < boss.radius + 14) {
       const randomSeat = DESK_SEATS[Math.floor(Math.random() * DESK_SEATS.length)];
       p.x = randomSeat.x;
       p.y = randomSeat.y;
@@ -242,6 +320,11 @@ io.on('connection', (socket) => {
         io.emit('playerMoved', { id: socket.id, x: players[socket.id].x, y: players[socket.id].y });
       }
     }
+  });
+
+  // Handle incoming chat messages
+  socket.on('sendChatMessage', (message) => {
+    io.emit('chatMessage', { id: socket.id, message });
   });
 
   socket.on('disconnect', () => {
