@@ -8,6 +8,13 @@ const io = new Server(server);
 
 const PORT = process.env.PORT || 3000;
 
+// Define Office Tables/Desks (x, y, width, height)
+const DESKS = [
+  { x: 100, y: 100, w: 120, h: 60 },
+  { x: 580, y: 100, w: 120, h: 60 },
+  { x: 340, y: 300, w: 120, h: 60 }
+];
+
 app.get('{*path}', (req, res) => {
   res.send(`
     <!DOCTYPE html>
@@ -48,17 +55,16 @@ app.get('{*path}', (req, res) => {
         const ctx = canvas.getContext('2d');
         const players = {};
         const keys = {};
-        let myId = null;
+
+        const desks = ${JSON.stringify(DESKS)};
 
         function joinGame() {
           const name = document.getElementById('username').value.trim() || 'Guest';
           const color = document.getElementById('userColor').value;
-          
           socket.emit('createProfile', { name, color });
           document.getElementById('profileOverlay').style.display = 'none';
         }
 
-        socket.on('connect', () => { myId = socket.id; });
         socket.on('currentPlayers', (p) => Object.assign(players, p));
         socket.on('newPlayer', ({ id, playerInfo }) => { players[id] = playerInfo; });
         socket.on('playerMoved', ({ id, x, y }) => { if (players[id]) { players[id].x = x; players[id].y = y; } });
@@ -79,16 +85,19 @@ app.get('{*path}', (req, res) => {
         function render() {
           ctx.clearRect(0, 0, canvas.width, canvas.height);
           
-          // Office Desks
-          ctx.fillStyle = '#94a3b8';
-          ctx.fillRect(100, 100, 120, 60);
-          ctx.fillRect(580, 100, 120, 60);
-          ctx.fillRect(340, 300, 120, 60);
+          // Draw Desks
+          ctx.fillStyle = '#64748b';
+          desks.forEach(d => {
+            ctx.fillRect(d.x, d.y, d.w, d.h);
+            ctx.strokeStyle = '#334155';
+            ctx.lineWidth = 3;
+            ctx.strokeRect(d.x, d.y, d.w, d.h);
+          });
 
-          // Render Players
+          // Draw Players
           for (let id in players) {
             const p = players[id];
-            if (!p.name) continue; // Hide players who haven't finished profile setup
+            if (!p.name) continue;
 
             ctx.beginPath();
             ctx.arc(p.x, p.y, 14, 0, Math.PI * 2);
@@ -98,7 +107,6 @@ app.get('{*path}', (req, res) => {
             ctx.strokeStyle = '#0f172a';
             ctx.stroke();
 
-            // Render Player Label
             ctx.fillStyle = '#0f172a';
             ctx.font = 'bold 13px system-ui';
             ctx.textAlign = 'center';
@@ -115,13 +123,31 @@ app.get('{*path}', (req, res) => {
 
 const players = {};
 
+// Helper function to check collision between a circle (player) and a rectangle (table)
+function checkDeskCollision(x, y, radius = 14) {
+  // Canvas boundaries
+  if (x - radius < 0 || x + radius > 800 || y - radius < 0 || y + radius > 500) {
+    return true;
+  }
+
+  // Desk solid collision
+  for (let d of DESKS) {
+    let closestX = Math.max(d.x, Math.min(x, d.x + d.w));
+    let closestY = Math.max(d.y, Math.min(y, d.y + d.h));
+
+    let distanceX = x - closestX;
+    let distanceY = y - closestY;
+
+    if ((distanceX * distanceX + distanceY * distanceY) < (radius * radius)) {
+      return true; // Collision detected!
+    }
+  }
+  return false;
+}
+
 io.on('connection', (socket) => {
-  players[socket.id] = {
-    x: Math.floor(Math.random() * 700) + 50,
-    y: Math.floor(Math.random() * 400) + 50,
-    color: '#3b82f6',
-    name: ''
-  };
+  // Spawn player in a safe open area
+  players[socket.id] = { x: 50, y: 50, color: '#3b82f6', name: '' };
 
   socket.emit('currentPlayers', players);
 
@@ -135,9 +161,15 @@ io.on('connection', (socket) => {
 
   socket.on('playerMovement', (move) => {
     if (players[socket.id] && players[socket.id].name) {
-      players[socket.id].x += move.x * 5;
-      players[socket.id].y += move.y * 5;
-      io.emit('playerMoved', { id: socket.id, x: players[socket.id].x, y: players[socket.id].y });
+      const nextX = players[socket.id].x + move.x * 4;
+      const nextY = players[socket.id].y + move.y * 4;
+
+      // Only move if there is NO collision
+      if (!checkDeskCollision(nextX, nextY)) {
+        players[socket.id].x = nextX;
+        players[socket.id].y = nextY;
+        io.emit('playerMoved', { id: socket.id, x: players[socket.id].x, y: players[socket.id].y });
+      }
     }
   });
 
