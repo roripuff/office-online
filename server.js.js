@@ -84,7 +84,7 @@ app.get('{*path}', (req, res) => {
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
         const players = {};
-        const keys = {};
+        let keys = {};
         let bossState = { x: 400, y: 100 };
         let pulseTimer = 0;
 
@@ -97,7 +97,7 @@ app.get('{*path}', (req, res) => {
           document.getElementById('profileOverlay').style.display = 'none';
         }
 
-        // Chat functionality
+        // Send Chat and unfocus input box
         function sendChat() {
           const input = document.getElementById('chatInput');
           const message = input.value.trim();
@@ -105,11 +105,22 @@ app.get('{*path}', (req, res) => {
             socket.emit('sendChatMessage', message);
             input.value = '';
           }
+          input.blur(); // Automatically remove focus so controls work instantly!
+          keys = {};   // Reset key states
         }
 
+        const chatInput = document.getElementById('chatInput');
+
+        // Clear active key movements when clicking into the chat input
+        chatInput.addEventListener('focus', () => {
+          keys = {};
+        });
+
         // Allow pressing 'Enter' key to send chat
-        document.getElementById('chatInput').addEventListener('keydown', (e) => {
-          if (e.key === 'Enter') sendChat();
+        chatInput.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            sendChat();
+          }
         });
 
         socket.on('currentPlayers', (p) => Object.assign(players, p));
@@ -122,18 +133,17 @@ app.get('{*path}', (req, res) => {
         socket.on('chatMessage', ({ id, message }) => {
           if (players[id]) {
             players[id].chatMessage = message;
-            players[id].chatTimer = Date.now() + 5000; // Display for 5 seconds
+            players[id].chatTimer = Date.now() + 5000;
           }
         });
 
         window.addEventListener('keydown', (e) => {
-          // Don't move player if typing in the chat box
-          if (document.activeElement === document.getElementById('chatInput')) return;
+          if (document.activeElement === chatInput) return;
           keys[e.key] = true;
         });
 
         window.addEventListener('keyup', (e) => {
-          if (document.activeElement === document.getElementById('chatInput')) return;
+          if (document.activeElement === chatInput) return;
           keys[e.key] = false;
         });
 
@@ -155,7 +165,6 @@ app.get('{*path}', (req, res) => {
           const bubbleX = x - (bubbleWidth / 2);
           const bubbleY = y - 50;
 
-          // Draw Bubble Background
           ctx.fillStyle = '#ffffff';
           ctx.strokeStyle = '#0f172a';
           ctx.lineWidth = 2;
@@ -164,7 +173,6 @@ app.get('{*path}', (req, res) => {
           ctx.fill();
           ctx.stroke();
 
-          // Draw Little Triangle Pointer
           ctx.beginPath();
           ctx.moveTo(x - 5, bubbleY + bubbleHeight);
           ctx.lineTo(x, bubbleY + bubbleHeight + 6);
@@ -172,7 +180,6 @@ app.get('{*path}', (req, res) => {
           ctx.fillStyle = '#ffffff';
           ctx.fill();
 
-          // Draw Message Text
           ctx.fillStyle = '#0f172a';
           ctx.textAlign = 'center';
           ctx.fillText(text, x, bubbleY + 16);
@@ -212,7 +219,6 @@ app.get('{*path}', (req, res) => {
             const p = players[id];
             if (!p.name) continue;
 
-            // Render Player Dot
             ctx.beginPath();
             ctx.arc(p.x, p.y, 14, 0, Math.PI * 2);
             ctx.fillStyle = p.color;
@@ -221,13 +227,11 @@ app.get('{*path}', (req, res) => {
             ctx.strokeStyle = '#0f172a';
             ctx.stroke();
 
-            // Render Name Label
             ctx.fillStyle = '#0f172a';
             ctx.font = 'bold 13px system-ui';
             ctx.textAlign = 'center';
             ctx.fillText(p.name, p.x, p.y - 20);
 
-            // Render Speech Bubble if Active
             if (p.chatMessage && p.chatTimer > now) {
               drawSpeechBubble(p.x, p.y, p.chatMessage);
             }
@@ -322,7 +326,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Handle incoming chat messages
   socket.on('sendChatMessage', (message) => {
     io.emit('chatMessage', { id: socket.id, message });
   });
