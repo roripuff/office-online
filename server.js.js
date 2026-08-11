@@ -8,12 +8,29 @@ const io = new Server(server);
 
 const PORT = process.env.PORT || 3000;
 
-// Define Office Tables/Desks (x, y, width, height)
+// Office Desks (x, y, width, height)
 const DESKS = [
   { x: 100, y: 100, w: 120, h: 60 },
   { x: 580, y: 100, w: 120, h: 60 },
   { x: 340, y: 300, w: 120, h: 60 }
 ];
+
+// Desk seats (x, y coordinates right next to desks where caught players get sent)
+const DESK_SEATS = [
+  { x: 160, y: 180 }, // Under Desk 1
+  { x: 640, y: 180 }, // Under Desk 2
+  { x: 400, y: 380 }  // Under Desk 3
+];
+
+// Boss State
+const boss = {
+  x: 400,
+  y: 100,
+  targetX: 400,
+  targetY: 100,
+  radius: 18,
+  speed: 2
+};
 
 app.get('{*path}', (req, res) => {
   res.send(`
@@ -46,7 +63,7 @@ app.get('{*path}', (req, res) => {
 
       <h2>Virtual Office Floor</h2>
       <canvas id="gameCanvas" width="800" height="500"></canvas>
-      <p style="color:#94a3b8;">Use <b>WASD</b> or <b>Arrow Keys</b> to walk around</p>
+      <p style="color:#94a3b8;">Avoid the <b>Red Boss</b>! If caught, you get sent back to your desk!</p>
 
       <script src="/socket.io/socket.io.js"></script>
       <script>
@@ -55,6 +72,8 @@ app.get('{*path}', (req, res) => {
         const ctx = canvas.getContext('2d');
         const players = {};
         const keys = {};
+        let bossState = { x: 400, y: 100 };
+        let pulseTimer = 0;
 
         const desks = ${JSON.stringify(DESKS)};
 
@@ -69,6 +88,8 @@ app.get('{*path}', (req, res) => {
         socket.on('newPlayer', ({ id, playerInfo }) => { players[id] = playerInfo; });
         socket.on('playerMoved', ({ id, x, y }) => { if (players[id]) { players[id].x = x; players[id].y = y; } });
         socket.on('playerDisconnected', (id) => delete players[id]);
+        
+        socket.on('bossUpdate', (data) => { bossState = data; });
 
         window.addEventListener('keydown', (e) => keys[e.key] = true);
         window.addEventListener('keyup', (e) => keys[e.key] = false);
@@ -84,6 +105,7 @@ app.get('{*path}', (req, res) => {
 
         function render() {
           ctx.clearRect(0, 0, canvas.width, canvas.height);
+          pulseTimer += 0.08;
           
           // Draw Desks
           ctx.fillStyle = '#64748b';
@@ -93,6 +115,22 @@ app.get('{*path}', (req, res) => {
             ctx.lineWidth = 3;
             ctx.strokeRect(d.x, d.y, d.w, d.h);
           });
+
+          // Draw Boss (Red Pulsating Circle)
+          const pulseRadius = 18 + Math.sin(pulseTimer) * 4;
+          ctx.beginPath();
+          ctx.arc(bossState.x, bossState.y, pulseRadius, 0, Math.PI * 2);
+          ctx.fillStyle = '#ef4444';
+          ctx.fill();
+          ctx.lineWidth = 3;
+          ctx.strokeStyle = '#991b1b';
+          ctx.stroke();
+
+          // Boss Label
+          ctx.fillStyle = '#ef4444';
+          ctx.font = 'bold 14px system-ui';
+          ctx.textAlign = 'center';
+          ctx.fillText('BOSS 😡', bossState.x, bossState.y - 25);
 
           // Draw Players
           for (let id in players) {
@@ -123,31 +161,65 @@ app.get('{*path}', (req, res) => {
 
 const players = {};
 
-// Helper function to check collision between a circle (player) and a rectangle (table)
 function checkDeskCollision(x, y, radius = 14) {
-  // Canvas boundaries
   if (x - radius < 0 || x + radius > 800 || y - radius < 0 || y + radius > 500) {
     return true;
   }
-
-  // Desk solid collision
   for (let d of DESKS) {
     let closestX = Math.max(d.x, Math.min(x, d.x + d.w));
     let closestY = Math.max(d.y, Math.min(y, d.y + d.h));
-
     let distanceX = x - closestX;
     let distanceY = y - closestY;
-
     if ((distanceX * distanceX + distanceY * distanceY) < (radius * radius)) {
-      return true; // Collision detected!
+      return true;
     }
   }
   return false;
 }
 
+// Boss AI Loop
+setInterval(() => {
+  // Pick a new random target location if boss reached destination
+  const distToTarget = Math.hypot(boss.targetX - boss.x, boss.targetY - boss.y);
+  if (distToTarget < 5) {
+    boss.targetX = Math.floor(Math.random() * 700) + 50;
+    boss.targetY = Math.floor(Math.random() * 400) + 50;
+  }
+
+  // Move boss toward target
+  const angle = Math.atan2(boss.targetY - boss.y, boss.targetX - boss.x);
+  const nextBossX = boss.x + Math.cos(angle) * boss.speed;
+  const nextBossY = boss.y + Math.sin(angle) * boss.speed;
+
+  if (!checkDeskCollision(nextBossX, nextBossY, boss.radius)) {
+    boss.x = nextBossX;
+    boss.y = nextBossY;
+  } else {
+    // Pick new target if hit wall/desk
+    boss.targetX = Math.floor(Math.random() * 700) + 50;
+    boss.targetY = Math.floor(Math.random() * 400) + 50;
+  }
+
+  // Check collision with all active players
+  for (let id in players) {
+    const p = players[id];
+    if (!p.name) continue;
+
+    const distToPlayer = Math.hypot(boss.x - p.x, boss.y - p.y);
+    if (distToPlayer < boss.radius + 14) { // Caught!
+      const randomSeat = DESK_SEATS[Math.floor(Math.random() * DESK_SEATS.length)];
+      p.x = randomSeat.x;
+      p.y = randomSeat.y;
+      io.emit('playerMoved', { id, x: p.x, y: p.y });
+    }
+  }
+
+  io.emit('bossUpdate', { x: boss.x, y: boss.y });
+}, 1000 / 30);
+
 io.on('connection', (socket) => {
-  // Spawn player in a safe open area
-  players[socket.id] = { x: 50, y: 50, color: '#3b82f6', name: '' };
+  const defaultSeat = DESK_SEATS[Math.floor(Math.random() * DESK_SEATS.length)];
+  players[socket.id] = { x: defaultSeat.x, y: defaultSeat.y, color: '#3b82f6', name: '' };
 
   socket.emit('currentPlayers', players);
 
@@ -164,7 +236,6 @@ io.on('connection', (socket) => {
       const nextX = players[socket.id].x + move.x * 4;
       const nextY = players[socket.id].y + move.y * 4;
 
-      // Only move if there is NO collision
       if (!checkDeskCollision(nextX, nextY)) {
         players[socket.id].x = nextX;
         players[socket.id].y = nextY;
